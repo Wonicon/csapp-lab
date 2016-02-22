@@ -34,29 +34,26 @@ int main(int argc, char **argv)
     int listenfd = Open_listenfd(atoi(argv[1]));
     puts("End opening listening fd");
 
-    struct sockaddr_in connect_addr;
+    SA connect_addr;
     socklen_t connect_addr_len;
+
+    /* Prepare buffer */
+    rio_t send_buf;
+    char user_buf[RIO_BUFSIZE];
 
     for (;;) {
         puts("Start listening");
         int connectfd =
             Accept(listenfd, (SA *)&connect_addr, &connect_addr_len);
         puts("End listening");
+
         puts("Start reading");
-        char buf[1024];
-        bzero(buf, sizeof(buf));
+        Rio_readinitb(&send_buf, connectfd);
         ssize_t size;
         do {
-            size = Rio_readn(connectfd, buf, sizeof(buf));
-            //size = read(connectfd, buf, sizeof(buf));
-            if (size == 0) {
-                perror("");
-                break;
-            }
-            printf("=== Read %ld bytes ===\n", size);
-            fprintf(stderr, "%s", buf);
-            bzero(buf, 1024);
-        } while (size == sizeof(buf));
+            size = Rio_readlineb(&send_buf, user_buf, sizeof(user_buf));
+            printf("%s", user_buf);
+        } while (size > 2);  // strcmp(user_buf, "\r\n") != 0
         puts("End reading");
 
         shutdown(connectfd, SHUT_RDWR);
