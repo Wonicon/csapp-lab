@@ -15,6 +15,7 @@
 /*
  * Function prototypes
  */
+void redirect_packet(int sockfd);
 int parse_uri(char *uri, char *target_addr, char *path, int  *port);
 void format_log_entry(char *logstring, struct sockaddr_in *sockaddr, char *uri, int size);
 
@@ -37,27 +38,13 @@ int main(int argc, char **argv)
     SA connect_addr;
     socklen_t connect_addr_len;
 
-    /* Prepare buffer */
-    rio_t send_buf;
-    char user_buf[RIO_BUFSIZE];
-
     for (;;) {
         puts("Start listening");
         int connectfd =
             Accept(listenfd, (SA *)&connect_addr, &connect_addr_len);
         puts("End listening");
 
-        puts("Start reading");
-        Rio_readinitb(&send_buf, connectfd);
-        ssize_t size;
-        do {
-            size = Rio_readlineb(&send_buf, user_buf, sizeof(user_buf));
-            printf("%s", user_buf);
-        } while (size > 2);  // strcmp(user_buf, "\r\n") != 0
-        puts("End reading");
-
-        shutdown(connectfd, SHUT_RDWR);
-        Close(connectfd);
+        redirect_packet(connectfd);
     }
 
     Close(listenfd);
@@ -65,6 +52,104 @@ int main(int argc, char **argv)
     exit(0);
 }
 
+char *extract_uri(char *header);
+
+void redirect_packet(int sockfd)
+{
+    /* Prepare buffer */
+    rio_t send_buf;
+    Rio_readinitb(&send_buf, sockfd);
+
+    ssize_t size;
+
+    char user_buf[MAXBUF];
+    char hostname[MAXBUF];
+    char pathname[MAXBUF];
+    int port;
+
+    puts("Start reading");
+
+    /* Get uri */
+    size = Rio_readlineb(&send_buf, user_buf, sizeof(user_buf));
+    char *uri = extract_uri(user_buf);
+    parse_uri(uri, hostname, pathname, &port);
+
+    printf("hostname: %s\n", hostname);
+    printf("pathname: %s\n", pathname);
+    printf("port: %d\n", port);
+
+    /* Connect to server */
+    int server_fd = open_clientfd(hostname, port);
+
+    Rio_writen(server_fd, user_buf, size);
+    do {
+        size = Rio_readlineb(&send_buf, user_buf, sizeof(user_buf));
+        printf("%s", user_buf);
+        Rio_writen(server_fd, user_buf, size);
+    } while (size > 2);  // strcmp(user_buf, "\r\n") != 0
+
+    shutdown(server_fd, SHUT_WR);
+    shutdown(sockfd, SHUT_RD);
+
+    puts("End reading");
+    puts("Start writing");
+
+    /* Receive packet from server */
+    rio_t recv_buf;
+    Rio_readinitb(&recv_buf, server_fd);
+
+    do {
+        size = Rio_readlineb(&recv_buf, user_buf, sizeof(user_buf));
+        printf("%s", user_buf);
+        Rio_writen(sockfd, user_buf, size);
+        /* Temp */
+        break;
+    } while (size > 2);
+
+    /* Temp */
+    char msg[] = "<html>Hello World</html>";
+    Rio_writen(sockfd, "\r\n", 2);
+    Rio_writen(sockfd, msg, strlen(msg) + 1);
+
+    puts("End writing");
+
+    shutdown(server_fd, SHUT_RD);
+    Close(server_fd);
+
+    shutdown(sockfd, SHUT_WR);
+    Close(sockfd);
+}
+
+/*
+ * extract_uri - Extract uri from http header
+ *
+ * Prepare the well-formed uri, stripping out
+ * http method and version information.
+ *
+ * [IN] header:
+ *      The first line of http message,
+ *      containing method, uri and http
+ *      version.
+ * [RETURN]
+ *      A duplication of the uri, the
+ *      caller should remember to free
+ *      the space.
+ */
+char *extract_uri(char *header)
+{
+    char needle[] = " ";
+
+    /* uri's content is between [uri_beg, uri_end) */
+    char *uri_beg = strstr(header, needle) + strlen(needle);
+    char *uri_end = strstr(uri_beg, needle);
+
+    size_t uri_len = uri_end - uri_beg;
+    char *uri_buf = Malloc((uri_len + 1) * sizeof(*uri_buf));
+    strncpy(uri_buf, uri_beg, uri_len);
+    uri_buf[uri_len] = '\0';
+
+    return uri_buf;
+}
 
 /*
  * parse_uri - URI parser
